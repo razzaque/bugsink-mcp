@@ -12,6 +12,8 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import http from "node:http";
 import { z } from "zod";
 import { BugsinkClient, type Issue, type Event, type Release } from "./bugsink-client.js";
 
@@ -36,7 +38,10 @@ const client = new BugsinkClient({
   apiToken: BUGSINK_TOKEN,
 });
 
-// Initialize MCP server
+// Build a fully-configured MCP server. A fresh instance is created per HTTP
+// request (the stateless transport cannot serve sequential requests on one
+// instance) and once for stdio. Helpers/tools below are registered on it.
+function createServer(): McpServer {
 const server = new McpServer({
   name: "bugsink-mcp",
   version: "0.2.0",
@@ -130,6 +135,7 @@ server.tool(
   "list_projects",
   "List all projects in the Bugsink instance",
   {},
+  { readOnlyHint: true },
   async () => {
     const response = await client.listProjects();
 
@@ -154,6 +160,7 @@ server.tool(
   "list_teams",
   "List all teams in the Bugsink instance",
   {},
+  { readOnlyHint: true },
   async () => {
     const response = await client.listTeams();
 
@@ -184,6 +191,7 @@ server.tool(
     sort: z.enum(['digest_order', 'last_seen']).optional().describe("Sort mode: 'digest_order' or 'last_seen' (default: digest_order)"),
     order: z.enum(['asc', 'desc']).optional().describe("Sort order: 'asc' or 'desc' (default: desc)"),
   },
+  { readOnlyHint: true },
   async ({ project_id, status, limit, sort, order }) => {
     const response = await client.listIssues(project_id, { status, limit, sort, order });
 
@@ -208,6 +216,7 @@ server.tool(
   {
     issue_id: z.string().describe("The issue ID (UUID) to retrieve"),
   },
+  { readOnlyHint: true },
   async ({ issue_id }) => {
     const issue = await client.getIssue(issue_id);
 
@@ -227,6 +236,7 @@ server.tool(
     issue_id: z.string().describe("The issue ID (UUID) to list events for"),
     limit: z.number().optional().default(10).describe("Maximum number of events to return (default: 10)"),
   },
+  { readOnlyHint: true },
   async ({ issue_id, limit }) => {
     const response = await client.listEvents(issue_id, { limit });
 
@@ -251,6 +261,7 @@ server.tool(
   {
     event_id: z.string().describe("The event ID (UUID) to retrieve"),
   },
+  { readOnlyHint: true },
   async ({ event_id }) => {
     const event = await client.getEvent(event_id);
 
@@ -279,6 +290,7 @@ server.tool(
   "test_connection",
   "Test the connection to the Bugsink instance",
   {},
+  { readOnlyHint: true },
   async () => {
     const result = await client.testConnection();
 
@@ -300,6 +312,7 @@ server.tool(
   {
     project_id: z.number().describe("The project ID to retrieve"),
   },
+  { readOnlyHint: true },
   async ({ project_id }) => {
     const project = await client.getProject(project_id);
 
@@ -340,6 +353,7 @@ server.tool(
     alert_on_regression: z.boolean().optional().default(true).describe("Send alerts for regressions"),
     alert_on_unmute: z.boolean().optional().default(true).describe("Send alerts when issues are unmuted"),
   },
+  { destructiveHint: true },
   async ({ team_id, name, visibility, alert_on_new_issue, alert_on_regression, alert_on_unmute }) => {
     const project = await client.createProject({
       team: team_id,
@@ -372,6 +386,7 @@ server.tool(
     alert_on_unmute: z.boolean().optional().describe("Send alerts when issues are unmuted"),
     retention_max_event_count: z.number().optional().describe("Maximum events to retain"),
   },
+  { destructiveHint: true },
   async ({ project_id, ...updates }) => {
     // Filter out undefined values
     const input = Object.fromEntries(
@@ -397,6 +412,7 @@ server.tool(
     name: z.string().describe("The team name"),
     visibility: z.enum(['joinable', 'discoverable', 'hidden']).optional().default('discoverable').describe("Team visibility"),
   },
+  { destructiveHint: true },
   async ({ name, visibility }) => {
     const team = await client.createTeam({ name, visibility });
 
@@ -418,6 +434,7 @@ server.tool(
     name: z.string().optional().describe("New team name"),
     visibility: z.enum(['joinable', 'discoverable', 'hidden']).optional().describe("Team visibility"),
   },
+  { destructiveHint: true },
   async ({ team_id, name, visibility }) => {
     const input = Object.fromEntries(
       Object.entries({ name, visibility }).filter(([_, v]) => v !== undefined)
@@ -445,6 +462,7 @@ server.tool(
   {
     event_id: z.string().describe("The event ID (UUID) to get stacktrace for"),
   },
+  { readOnlyHint: true },
   async ({ event_id }) => {
     const markdown = await client.getEventStacktrace(event_id);
 
@@ -465,6 +483,7 @@ server.tool(
   {
     project_id: z.number().describe("The project ID to list releases for"),
   },
+  { readOnlyHint: true },
   async ({ project_id }) => {
     const response = await client.listReleases(project_id);
 
@@ -491,6 +510,7 @@ server.tool(
   {
     release_id: z.string().describe("The release ID (UUID) to retrieve"),
   },
+  { readOnlyHint: true },
   async ({ release_id }) => {
     const release = await client.getRelease(release_id);
 
@@ -518,6 +538,7 @@ server.tool(
     version: z.string().describe("The release version string (e.g., '1.0.0', 'v2.3.1')"),
     timestamp: z.string().optional().describe("Release timestamp (ISO 8601 format). Defaults to now."),
   },
+  { destructiveHint: true },
   async ({ project_id, version, timestamp }) => {
     const release = await client.createRelease({
       project: project_id,
@@ -534,16 +555,92 @@ server.tool(
   }
 );
 
+  return server;
+}
+
 // ============================================================================
 // Server Startup
 // ============================================================================
 
+/**
+ * Serve over Streamable HTTP (stateless JSON mode) so a remote MCP client — e.g.
+ * the Trellios governed proxy — can reach this server over the network. Enabled
+ * by MCP_HTTP_PORT; optional MCP_HTTP_AUTH_TOKEN requires a matching
+ * `Authorization: Bearer <token>` on every request. A fresh server + transport
+ * is created per request (stateless transports do not reuse across requests).
+ */
+async function startHttpServer(port: number): Promise<void> {
+  const authToken = process.env.MCP_HTTP_AUTH_TOKEN;
+
+  const httpServer = http.createServer(async (req, res) => {
+    if (authToken) {
+      const presented = (req.headers["authorization"] || "").replace(/^Bearer\s+/i, "");
+      if (presented !== authToken) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+    }
+    if (req.method !== "POST") {
+      res.writeHead(405, { "Content-Type": "application/json", Allow: "POST" });
+      res.end(JSON.stringify({ error: "method_not_allowed" }));
+      return;
+    }
+
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    let parsed: unknown;
+    try {
+      parsed = body ? JSON.parse(body) : undefined;
+    } catch {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "invalid_json" }));
+      return;
+    }
+
+    const server = createServer();
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+      enableJsonResponse: true,
+    });
+    res.on("close", () => {
+      void transport.close();
+      void server.close();
+    });
+    try {
+      await server.connect(transport);
+      await transport.handleRequest(req, res, parsed);
+    } catch (error) {
+      console.error("HTTP request handling failed:", error);
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "internal_error" }));
+      }
+    }
+  });
+
+  httpServer.listen(port, () => {
+    console.error(`Bugsink MCP server started (streamable-http) on port ${port}`);
+    console.error(`Connected to: ${BUGSINK_URL}`);
+  });
+}
+
 async function main() {
+  // Cloud Run (and most container platforms) inject PORT and expect the app to
+  // listen on it; MCP_HTTP_PORT is an explicit override. Either enables HTTP
+  // mode. With neither set, fall back to stdio (local Claude/Cursor usage).
+  const httpPort = process.env.MCP_HTTP_PORT || process.env.PORT;
+  if (httpPort) {
+    await startHttpServer(Number(httpPort));
+    return;
+  }
+
+  const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
   // Log to stderr to avoid interfering with MCP protocol on stdout
-  console.error("Bugsink MCP server started");
+  console.error("Bugsink MCP server started (stdio)");
   console.error(`Connected to: ${BUGSINK_URL}`);
 }
 
