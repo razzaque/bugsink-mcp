@@ -147,6 +147,60 @@ Get detailed event information including full stacktrace.
 **Parameters:**
 - `event_id` (string, required): The event ID
 
+### `resolve_issue`
+Mark an issue resolved.
+
+**Parameters:**
+- `issue_id` (string, required): The issue UUID
+
+### `resolve_issue_next_release`
+Mark an issue resolved by the **next** release. A recurrence after that release ships reopens
+it as a regression, so prefer this over `resolve_issue` when a fix is merged but not yet
+deployed.
+
+Requires events to carry a `release` — with no release reported there is no "next" for Bugsink
+to compare against, and the resolution behaves like a plain one.
+
+**Parameters:**
+- `issue_id` (string, required): The issue UUID
+
+### `mute_issue`
+Mute an issue indefinitely. Use for noise that is not a defect — dev/shell tracebacks, expected
+third-party failures — rather than `resolve_issue`, which asserts a fix that does not exist.
+
+**Parameters:**
+- `issue_id` (string, required): The issue UUID
+
+### `mute_issue_for_period`
+Mute an issue for a fixed period, after which it becomes visible again.
+
+**Parameters:**
+- `issue_id` (string, required): The issue UUID
+- `period_name` (string, required): Period unit, e.g. `day`, `week`, `month`
+- `nr_of_periods` (number, required): How many periods (>= 1)
+
+### `mute_issue_until_threshold`
+Mute an issue until it recurs at least a threshold number of times within a window — surfaces it
+again only if it gets worse.
+
+**Parameters:**
+- `issue_id` (string, required): The issue UUID
+- `period_name` (string, required): Period unit
+- `nr_of_periods` (number, required): Window length in periods (>= 1)
+- `gte_threshold` (number, required): Recurrence count that unmutes it
+
+### `unmute_issue`
+Unmute a muted issue.
+
+**Parameters:**
+- `issue_id` (string, required): The issue UUID
+
+### `reopen_issue`
+Reopen a resolved or muted issue — for when a resolution turns out to be wrong.
+
+**Parameters:**
+- `issue_id` (string, required): The issue UUID
+
 ## Example Usage
 
 Once configured, you can ask your AI assistant:

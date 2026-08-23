@@ -44,7 +44,7 @@ const client = new BugsinkClient({
 function createServer(): McpServer {
 const server = new McpServer({
   name: "bugsink-mcp",
-  version: "0.2.0",
+  version: "0.3.0",
 });
 
 // Helper to derive status from issue flags
@@ -555,8 +555,97 @@ server.tool(
   }
 );
 
+  // ── Issue state ────────────────────────────────────────────────────────────────
+  // POST to action sub-paths, not PATCH on the issue. Documented at
+  // https://www.bugsink.com/docs/api-documentation/
+
+  function describeIssueState(issue: Issue | null, action: string, issueId: string): string {
+    // These endpoints may answer 204 with no body, so the absence of a returned issue is a
+    // successful mutation, not a failure. Saying so explicitly beats printing "undefined".
+    if (!issue) return `${action}: ${issueId} (accepted; endpoint returned no body)`;
+    return [
+      `${action}: ${issue.id}`,
+      `  ${issue.calculated_type}: ${issue.calculated_value}`,
+      `  Status: ${getIssueStatus(issue)}`,
+      `  Resolved by next release: ${issue.is_resolved_by_next_release}`,
+    ].join('\n');
+  }
+
+  server.tool(
+    "resolve_issue",
+    "Mark an issue as resolved. Use resolve_issue_next_release instead when the fix is merged but not yet deployed.",
+    { issue_id: z.string().describe("The issue ID (UUID) to resolve") },
+    async ({ issue_id }) => ({
+      content: [{ type: "text", text: describeIssueState(await client.resolveIssue(issue_id), "Resolved", issue_id) }],
+    })
+  );
+
+  server.tool(
+    "resolve_issue_next_release",
+    "Mark an issue as resolved by the NEXT release — a recurrence after that release ships reopens it as a regression. Prefer this over resolve_issue when the fix is merged but not yet deployed. Requires events to carry a release; with no release reported there is no 'next' to compare against.",
+    { issue_id: z.string().describe("The issue ID (UUID) to resolve in the next release") },
+    async ({ issue_id }) => ({
+      content: [{ type: "text", text: describeIssueState(await client.resolveIssueNextRelease(issue_id), "Resolved in next release", issue_id) }],
+    })
+  );
+
+  server.tool(
+    "mute_issue",
+    "Mute an issue indefinitely. Use for noise that is not a defect (dev/shell tracebacks, expected third-party failures) rather than resolve, which asserts a fix.",
+    { issue_id: z.string().describe("The issue ID (UUID) to mute") },
+    async ({ issue_id }) => ({
+      content: [{ type: "text", text: describeIssueState(await client.muteIssue(issue_id), "Muted", issue_id) }],
+    })
+  );
+
+  server.tool(
+    "mute_issue_for_period",
+    "Mute an issue for a fixed period, after which it becomes visible again.",
+    {
+      issue_id: z.string().describe("The issue ID (UUID) to mute"),
+      period_name: z.string().describe("Period unit, e.g. 'day', 'week', 'month' (see the Bugsink API reference for the accepted enum)"),
+      nr_of_periods: z.number().int().min(1).describe("How many periods to mute for (>= 1)"),
+    },
+    async ({ issue_id, period_name, nr_of_periods }) => ({
+      content: [{ type: "text", text: describeIssueState(await client.muteIssueForPeriod(issue_id, period_name, nr_of_periods), `Muted for ${nr_of_periods} ${period_name}(s)`, issue_id) }],
+    })
+  );
+
+  server.tool(
+    "mute_issue_until_threshold",
+    "Mute an issue until it recurs at least a threshold number of times within a window — surfaces it again only if it gets worse.",
+    {
+      issue_id: z.string().describe("The issue ID (UUID) to mute"),
+      period_name: z.string().describe("Period unit, e.g. 'day', 'week', 'month'"),
+      nr_of_periods: z.number().int().min(1).describe("Window length in periods (>= 1)"),
+      gte_threshold: z.number().int().min(1).describe("Recurrence count within the window that unmutes it"),
+    },
+    async ({ issue_id, period_name, nr_of_periods, gte_threshold }) => ({
+      content: [{ type: "text", text: describeIssueState(await client.muteIssueUntilThreshold(issue_id, period_name, nr_of_periods, gte_threshold), `Muted until >=${gte_threshold} in ${nr_of_periods} ${period_name}(s)`, issue_id) }],
+    })
+  );
+
+  server.tool(
+    "unmute_issue",
+    "Unmute a muted issue.",
+    { issue_id: z.string().describe("The issue ID (UUID) to unmute") },
+    async ({ issue_id }) => ({
+      content: [{ type: "text", text: describeIssueState(await client.unmuteIssue(issue_id), "Unmuted", issue_id) }],
+    })
+  );
+
+  server.tool(
+    "reopen_issue",
+    "Reopen a resolved or muted issue — use when a resolution turns out to be wrong, rather than leaving it closed.",
+    { issue_id: z.string().describe("The issue ID (UUID) to reopen") },
+    async ({ issue_id }) => ({
+      content: [{ type: "text", text: describeIssueState(await client.reopenIssue(issue_id), "Reopened", issue_id) }],
+    })
+  );
+
   return server;
 }
+
 
 // ============================================================================
 // Server Startup

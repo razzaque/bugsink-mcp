@@ -185,6 +185,40 @@ export class BugsinkClient {
   }
 
   /**
+   * POST to an issue action endpoint (resolve/mute/reopen/...).
+   *
+   * Separate from `fetch` because these endpoints are documented as taking no request body
+   * and may answer 204 with an empty payload — `response.json()` throws on that, so a
+   * successful mutation would surface as a parse error and read as a failure. Returns the
+   * decoded body when there is one, `null` when there is not.
+   */
+  private async action<T>(endpoint: string, body?: unknown): Promise<T | null> {
+    const url = `${this.baseUrl}/api/canonical/0${endpoint}`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Bugsink API error (${response.status}): ${errorText}`);
+    }
+
+    const text = await response.text();
+    if (!text) return null;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * List all projects
    */
   async listProjects(): Promise<PaginatedResponse<Project>> {
@@ -382,5 +416,67 @@ export class BugsinkClient {
       method: 'POST',
       body: JSON.stringify(input),
     });
+  }
+
+  // ── Issue state ──────────────────────────────────────────────────────────────
+  // Each is a POST to an action sub-path, NOT a PATCH on the issue. Worth stating
+  // because PATCH /issues/{id}/ is the obvious guess and is not the API.
+
+  /** Mark an issue resolved. */
+  async resolveIssue(issueId: string): Promise<Issue | null> {
+    return this.action<Issue>(`/issues/${issueId}/resolve/`);
+  }
+
+  /**
+   * Mark an issue resolved by the NEXT release.
+   *
+   * Preferred over `resolveIssue` when a fix is merged but not yet deployed: a recurrence
+   * after that release ships reopens the issue as a regression, rather than being silently
+   * folded back into an already-resolved group. Requires events to carry a `release` — with
+   * no release reported, there is no "next" for Bugsink to compare against.
+   */
+  async resolveIssueNextRelease(issueId: string): Promise<Issue | null> {
+    return this.action<Issue>(`/issues/${issueId}/resolve-next/`);
+  }
+
+  /** Mute an issue indefinitely. */
+  async muteIssue(issueId: string): Promise<Issue | null> {
+    return this.action<Issue>(`/issues/${issueId}/mute/`);
+  }
+
+  /** Mute an issue for a fixed period. */
+  async muteIssueForPeriod(
+    issueId: string,
+    periodName: string,
+    nrOfPeriods: number,
+  ): Promise<Issue | null> {
+    return this.action<Issue>(`/issues/${issueId}/mute-for/`, {
+      period_name: periodName,
+      nr_of_periods: nrOfPeriods,
+    });
+  }
+
+  /** Mute an issue until it recurs at least `gteThreshold` times in the given window. */
+  async muteIssueUntilThreshold(
+    issueId: string,
+    periodName: string,
+    nrOfPeriods: number,
+    gteThreshold: number,
+  ): Promise<Issue | null> {
+    return this.action<Issue>(`/issues/${issueId}/mute-until/`, {
+      period_name: periodName,
+      nr_of_periods: nrOfPeriods,
+      gte_threshold: gteThreshold,
+    });
+  }
+
+  /** Unmute an issue. */
+  async unmuteIssue(issueId: string): Promise<Issue | null> {
+    return this.action<Issue>(`/issues/${issueId}/unmute/`);
+  }
+
+  /** Reopen a resolved or muted issue. */
+  async reopenIssue(issueId: string): Promise<Issue | null> {
+    return this.action<Issue>(`/issues/${issueId}/reopen/`);
   }
 }
