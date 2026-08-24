@@ -44,7 +44,7 @@ const client = new BugsinkClient({
 function createServer(): McpServer {
 const server = new McpServer({
   name: "bugsink-mcp",
-  version: "0.3.0",
+  version: "0.4.0",
 });
 
 // Helper to derive status from issue flags
@@ -642,6 +642,37 @@ server.tool(
     async ({ issue_id }) => ({
       content: [{ type: "text", text: describeIssueState(await client.reopenIssue(issue_id), "Reopened", issue_id) }],
     })
+  );
+
+  server.tool(
+    "bulk_issue_action",
+    "Apply one action (resolve / resolve_next / mute / unmute / reopen) to many issues in a single call. Use for backlog triage. Continues on error and reports which issues failed and why, rather than aborting part-way.",
+    {
+      issue_ids: z.array(z.string()).min(1).max(500).describe("Issue UUIDs to act on"),
+      action: z.enum(['resolve', 'resolve_next', 'mute', 'unmute', 'reopen']).describe("The action to apply to every listed issue"),
+    },
+    async ({ issue_ids, action }) => {
+      const { ok, failed } = await client.bulkIssueAction(issue_ids, action);
+      const lines = [
+        `${action}: ${ok.length} succeeded, ${failed.length} failed (of ${issue_ids.length} requested)`,
+      ];
+      if (failed.length) {
+        lines.push('', 'Failed:');
+        // Distinct reasons rather than one line per id: a few hundred identical errors
+        // tells the caller nothing the count did not already.
+        const byError = new Map<string, string[]>();
+        for (const f of failed) {
+          const k = f.error.slice(0, 160);
+          if (!byError.has(k)) byError.set(k, []);
+          byError.get(k)!.push(f.id.slice(0, 8));
+        }
+        for (const [err, ids] of byError) {
+          lines.push(`  ${ids.length}x ${err}`);
+          lines.push(`     ${ids.slice(0, 12).join(', ')}${ids.length > 12 ? ', …' : ''}`);
+        }
+      }
+      return { content: [{ type: "text", text: lines.join('\n') }] };
+    }
   );
 
   return server;

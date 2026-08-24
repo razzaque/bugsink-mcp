@@ -506,4 +506,44 @@ export class BugsinkClient {
   async reopenIssue(issueId: string): Promise<Issue | null> {
     return this.action<Issue>(`/issues/${issueId}/reopen/`);
   }
+
+  /**
+   * Apply one action to many issues.
+   *
+   * Exists because a backlog triage is a few hundred issues and the API has no bulk
+   * endpoint — one round trip each is not workable for the caller.
+   *
+   * Deliberately CONTINUES ON ERROR and reports per-issue outcomes. Aborting on the first
+   * failure would leave a partial mutation the caller cannot see the shape of, which for
+   * resolve/mute over client-visible state is worse than finishing and being told exactly
+   * what did not apply. Requests are issued sequentially rather than in parallel: this is
+   * a self-hosted instance running on the box it monitors, and a few hundred concurrent
+   * writes is not a load it should have to absorb.
+   */
+  async bulkIssueAction(
+    issueIds: string[],
+    action: 'resolve' | 'resolve_next' | 'mute' | 'unmute' | 'reopen',
+  ): Promise<{ ok: string[]; failed: { id: string; error: string }[] }> {
+    const verb: Record<string, string> = {
+      resolve: 'resolve',
+      resolve_next: 'resolve-next',
+      mute: 'mute',
+      unmute: 'unmute',
+      reopen: 'reopen',
+    };
+    const path = verb[action];
+    if (!path) throw new Error(`Unknown bulk action: ${action}`);
+
+    const ok: string[] = [];
+    const failed: { id: string; error: string }[] = [];
+    for (const id of issueIds) {
+      try {
+        await this.action<Issue>(`/issues/${id}/${path}/`);
+        ok.push(id);
+      } catch (e) {
+        failed.push({ id, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    return { ok, failed };
+  }
 }

@@ -201,6 +201,19 @@ Reopen a resolved or muted issue — for when a resolution turns out to be wrong
 **Parameters:**
 - `issue_id` (string, required): The issue UUID
 
+### `bulk_issue_action`
+Apply one action to many issues in a single call — for backlog triage, where one round trip
+per issue is not workable.
+
+Continues on error and reports which issues failed and why, grouped by distinct error, rather
+than aborting part-way. A partial mutation the caller cannot see the shape of is worse than a
+completed one with an explicit list of what did not apply. Requests are sequential, not
+parallel: a self-hosted instance should not have to absorb a few hundred concurrent writes.
+
+**Parameters:**
+- `issue_ids` (string[], required): Issue UUIDs, 1–500
+- `action` (enum, required): `resolve` | `resolve_next` | `mute` | `unmute` | `reopen`
+
 ## Example Usage
 
 Once configured, you can ask your AI assistant:
