@@ -44,7 +44,7 @@ const client = new BugsinkClient({
 function createServer(): McpServer {
 const server = new McpServer({
   name: "bugsink-mcp",
-  version: "0.5.0",
+  version: "0.6.0",
 });
 
 // Helper to derive status from issue flags

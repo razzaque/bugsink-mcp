@@ -341,11 +341,22 @@ export class BugsinkClient {
     const params = new URLSearchParams();
     params.set('issue', issueId);
 
-    if (options?.limit) {
-      params.set('limit', options.limit.toString());
-    }
+    // Applied client-side for the same reason as listIssues: Bugsink 2.5.0 ignores `limit`
+    // as a query param, so every call returned the issue's FULL event history. On a
+    // 90-event issue that is thousands of lines the caller did not ask for and, for an MCP
+    // consumer, context spent before it can read any of them. Asking for 1 event and
+    // receiving 90 is not a cosmetic problem when the response is the context.
+    const page = await this.fetch<PaginatedResponse<Event>>(`/events/?${params.toString()}`);
+    const results = options?.limit !== undefined
+      ? (page.results ?? []).slice(0, options.limit)
+      : (page.results ?? []);
 
-    return this.fetch<PaginatedResponse<Event>>(`/events/?${params.toString()}`);
+    // Deliberately NOT following `next` here, unlike listIssues. There, pagination had to
+    // be followed because a client-side FILTER over one page silently under-reports. Here
+    // the only client-side operation is a head-slice of a server-ordered list, which one
+    // page always satisfies — and fetching every page to then discard all but the first
+    // few would be the opposite of what this fix is for.
+    return { ...page, results };
   }
 
   /**
