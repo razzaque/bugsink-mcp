@@ -15,7 +15,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import http from "node:http";
 import { z } from "zod";
-import { BugsinkClient, type Issue, type Event, type Release } from "./bugsink-client.js";
+import { BugsinkClient, issueStatus, type Issue, type Event, type Release } from "./bugsink-client.js";
 
 // Environment configuration
 const BUGSINK_URL = process.env.BUGSINK_URL;
@@ -48,10 +48,11 @@ const server = new McpServer({
 });
 
 // Helper to derive status from issue flags
+// Delegates to the client's exported derivation so the `status` filter and the label a
+// caller reads can never disagree. Two copies of this drifting is how a filtered list
+// starts contradicting its own labels.
 function getIssueStatus(issue: Issue): string {
-  if (issue.is_resolved) return 'resolved';
-  if (issue.is_muted) return 'muted';
-  return 'unresolved';
+  return issueStatus(issue);
 }
 
 // Helper to format issue for display

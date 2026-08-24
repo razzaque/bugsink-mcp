@@ -155,6 +155,17 @@ export interface CreateReleaseInput {
   timestamp?: string;
 }
 
+/**
+ * Canonical issue status. Exported so the client-side `status` filter and the display layer
+ * derive it from one place — two copies of this drifting is how a filter starts disagreeing
+ * with the label it filtered on.
+ */
+export function issueStatus(issue: Issue): 'resolved' | 'muted' | 'unresolved' {
+  if (issue.is_resolved) return 'resolved';
+  if (issue.is_muted) return 'muted';
+  return 'unresolved';
+}
+
 export class BugsinkClient {
   private baseUrl: string;
   private apiToken: string;
@@ -251,12 +262,12 @@ export class BugsinkClient {
     const params = new URLSearchParams();
     params.set('project', projectId.toString());
 
-    if (options?.status) {
-      params.set('status', options.status);
-    }
-    if (options?.limit) {
-      params.set('limit', options.limit.toString());
-    }
+    // `status` and `limit` are applied CLIENT-SIDE on purpose — do not "restore" them as
+    // query params. Against Bugsink 2.5.0 the server does not honour either, and `status`
+    // is worse than ignored: `?status=muted` came back with a different result set, ordered
+    // oldest-first, every row reporting `is_resolved`, and the actually-muted issues absent.
+    // A call that succeeds and answers wrong is more dangerous than one that errors, and
+    // this tool's output feeds resolve/mute decisions. `sort`/`order` ARE honoured.
     if (options?.sort) {
       params.set('sort', options.sort);
     }
@@ -264,7 +275,23 @@ export class BugsinkClient {
       params.set('order', options.order);
     }
 
-    return this.fetch<PaginatedResponse<Issue>>(`/issues/?${params.toString()}`);
+    const page = await this.fetch<PaginatedResponse<Issue>>(`/issues/?${params.toString()}`);
+    let results = page.results ?? [];
+
+    if (options?.status) {
+      const want = options.status.toLowerCase();
+      results = results.filter((i) => issueStatus(i) === want);
+    }
+    // Applying the limit here is also what makes the tool usable: unfiltered responses run
+    // to ~250 issues / 90KB, which overruns an MCP consumer's context before it can read them.
+    if (options?.limit !== undefined) {
+      results = results.slice(0, options.limit);
+    }
+
+    // `next`/`previous` are deliberately preserved from the server response rather than
+    // recomputed: they describe the SERVER's pagination, which client-side filtering does
+    // not change. Consumers should not read them as "more rows matching your filter".
+    return { ...page, results };
   }
 
   /**
