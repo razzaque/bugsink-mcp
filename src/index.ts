@@ -87,6 +87,18 @@ function formatEvent(event: Event, includeStacktrace = false): string {
     if (data.platform) {
       lines.push(`  Platform: ${data.platform}`);
     }
+    // Surfaced prominently because it decides whether an event is worth acting on at all.
+    // Without it a laptop traceback and a live production regression look identical in a
+    // listing — same in-app frames, same task name, same recency.
+    if (data.environment) {
+      lines.push(`  Environment: ${data.environment}`);
+    }
+    if (data.release) {
+      lines.push(`  Release: ${data.release}`);
+    }
+    if (data.server_name) {
+      lines.push(`  Server: ${data.server_name}`);
+    }
     if (data.message) {
       lines.push(`  Message: ${data.message}`);
     }

@@ -79,6 +79,21 @@ export interface EventData {
   message?: string;
   level?: string;
   platform?: string;
+  /**
+   * Which deployment produced this event — "production", "staging", "development".
+   *
+   * Set by the reporting SDK (`sentry_sdk.init(environment=...)`) and previously not
+   * surfaced anywhere in this client, which made a local dev traceback indistinguishable
+   * from a production one in the issue list. That is not a cosmetic gap: a Celery
+   * stacktrace with in-app frames from someone's laptop reads exactly like a live
+   * production regression, and the only way to tell was to open the event and read the
+   * trace baggage.
+   */
+  environment?: string;
+  /** The build that produced the event, when the reporter sets `release`. */
+  release?: string;
+  /** Reporting host, a weaker fallback signal when `environment` is unset. */
+  server_name?: string;
   tags?: Record<string, string>;
   contexts?: Record<string, unknown>;
   request?: {
@@ -176,7 +191,11 @@ export class BugsinkClient {
   }
 
   private async fetch<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const url = `${this.baseUrl}/api/canonical/0${endpoint}`;
+    // `next` from a paginated response is an absolute URL; everything else is a path
+    // relative to the canonical API root.
+    const url = endpoint.startsWith('http')
+      ? endpoint
+      : `${this.baseUrl}/api/canonical/0${endpoint}`;
 
     const response = await fetch(url, {
       ...options,
@@ -275,8 +294,20 @@ export class BugsinkClient {
       params.set('order', options.order);
     }
 
-    const page = await this.fetch<PaginatedResponse<Issue>>(`/issues/?${params.toString()}`);
+    // Follow `next` rather than filtering a single page. Filtering client-side over one
+    // page silently UNDER-REPORTS: `status=muted` returned "no issues found" while two
+    // muted issues existed, because the default ordering put them on a later page. A
+    // filter that quietly misses matches is the same failure this method was fixed for.
+    // Capped so a malformed `next` cannot loop forever.
+    const MAX_PAGES = 25;
+    let page = await this.fetch<PaginatedResponse<Issue>>(`/issues/?${params.toString()}`);
     let results = page.results ?? [];
+    let pages = 1;
+    while (page.next && pages < MAX_PAGES) {
+      page = await this.fetch<PaginatedResponse<Issue>>(page.next);
+      results = results.concat(page.results ?? []);
+      pages += 1;
+    }
 
     if (options?.status) {
       const want = options.status.toLowerCase();
