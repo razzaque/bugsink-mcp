@@ -7,9 +7,11 @@ set -e
 echo "=== Bugsink MCP Server Integration Test ==="
 echo ""
 
-# Configuration
-export BUGSINK_URL="https://error-tracking.bookingmanager.com"
-export BUGSINK_TOKEN="9eb79cc2ca05503cc75b30174b14c201fd3006dd"
+# Configuration — read from the environment, never committed. A token previously lived
+# here in plain text; it belonged to the upstream author's instance and has been removed.
+: "${BUGSINK_URL:?set BUGSINK_URL to your Bugsink instance, e.g. https://bugsink.example.com}"
+: "${BUGSINK_TOKEN:?set BUGSINK_TOKEN to an API token for that instance}"
+export BUGSINK_URL BUGSINK_TOKEN
 
 cd "$(dirname "$0")"
 
