@@ -290,9 +290,14 @@ export class BugsinkClient {
     if (options?.sort) {
       params.set('sort', options.sort);
     }
-    if (options?.order) {
-      params.set('order', options.order);
-    }
+    // Always send `order`, defaulting to 'desc' — the default the tool schema documents.
+    // Omitting it hands ordering to the server, and Bugsink's default is ASCENDING: a call
+    // with no `order` returned the oldest page (May–June) while the schema promised newest
+    // first. Combined with the MAX_PAGES cap below, that made a healthy, actively ingesting
+    // instance look as though it had stopped receiving errors eleven weeks earlier — the
+    // false alarm in agent-marketing#2449. A default that contradicts its own documentation
+    // punishes exactly the careful reader who trusts it.
+    params.set('order', options?.order ?? 'desc');
 
     // Follow `next` rather than filtering a single page. Filtering client-side over one
     // page silently UNDER-REPORTS: `status=muted` returned "no issues found" while two
